@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>chatbot0916 - Messaging App</title>
+  <style>
+    * { margin:0; padding:0; box-sizing:border-box; font-family:"Segoe UI", Tahoma, sans-serif; }
+    body { background:linear-gradient(135deg,#6a11cb,#2575fc); height:100vh; display:flex; justify-content:center; align-items:center; }
+    .container { background:#fff; padding:2rem; border-radius:20px; width:100%; max-width:400px; text-align:center; box-shadow:0 10px 25px rgba(0,0,0,.2); }
+    .logo { font-size:2rem; font-weight:bold; color:#2575fc; margin-bottom:1.5rem; }
+    input { width:100%; padding:.8rem; margin:.5rem 0; border:1px solid #ccc; border-radius:8px; font-size:1rem; }
+    .btn { display:block; width:100%; padding:.8rem; margin:.5rem 0; border:none; border-radius:10px; font-size:1rem; cursor:pointer; transition:.3s ease; }
+    .btn-primary{ background:#2575fc; color:#fff; } .btn-primary:hover{ background:#1a5fd8; }
+    .btn-outline{ background:#fff; border:2px solid #2575fc; color:#2575fc; } .btn-outline:hover{ background:#2575fc; color:#fff; }
+    .btn-google{ background:#db4437; color:#fff; } .btn-google:hover{ background:#b23224; }
+    #authForm, #resendBox { display:none; margin-top:1rem; }
+    #message { margin-top:1rem; font-size:.9rem; color:#333; min-height:1.2rem; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="logo">chatbot0916</div>
+
+    <div id="choiceBox">
+      <button class="btn btn-primary" onclick="showForm('create')">Create Account</button>
+      <button class="btn btn-outline" onclick="showForm('signin')">Sign In</button>
+      <button class="btn btn-google" onclick="googleLogin()">Sign in with Google</button>
+    </div>
+
+    <div id="authForm">
+      <input type="email" id="email" placeholder="Email"/>
+      <input type="password" id="password" placeholder="Password"/>
+      <button class="btn btn-primary" id="enterBtn">Enter</button>
+      <button class="btn btn-outline" onclick="goBack()">Back</button>
+    </div>
+
+    <div id="resendBox">
+      <button class="btn btn-outline" id="resendBtn">Resend Verification Email</button>
+    </div>
+
+    <div id="message"></div>
+  </div>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-app.js";
+    import {
+      getAuth,
+      createUserWithEmailAndPassword,
+      signInWithEmailAndPassword,
+      GoogleAuthProvider,
+      signInWithPopup,
+      sendEmailVerification
+    } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-auth.js";
+    import {
+      getDatabase,
+      ref,
+      set,
+      update,
+      get,
+      child
+    } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-database.js";
+
+    // ⚙️ Firebase config
+    const firebaseConfig = {
+      apiKey: "AIzaSyCQXgRvpR285OV_HmBRgbBmcNNCcfyfDWI",
+      authDomain: "chattingbot0916.firebaseapp.com",
+      projectId: "chattingbot0916",
+      storageBucket: "chattingbot0916.firebasestorage.app",
+      messagingSenderId: "955856103094",
+      appId: "1:955856103094:web:349c85927913b0fc4fa817",
+      measurementId: "G-710YQR4NE0",
+      databaseURL: "https://chattingbot0916-default-rtdb.firebaseio.com/"
+    };
+
+    // 🔧 Init
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getDatabase(app);
+    const provider = new GoogleAuthProvider();
+
+    // 🧩 UI elements
+    const choiceBox = document.getElementById("choiceBox");
+    const authForm = document.getElementById("authForm");
+    const emailInput = document.getElementById("email");
+    const passwordInput = document.getElementById("password");
+    const message = document.getElementById("message");
+    const enterBtn = document.getElementById("enterBtn");
+    const resendBox = document.getElementById("resendBox");
+    const resendBtn = document.getElementById("resendBtn");
+
+    let currentAction = null;
+    let lastCreatedUser = null;
+
+    // Helpers
+    const normalizeEmailKey = (email) =>
+      email.toLowerCase().replace(/[.#$\[\]]/g, "_").trim();
+
+    async function ensureProfileAndEmailIndex(user, fallbackName = "") {
+      const uid = user.uid;
+      const email = (user.email || "").toLowerCase();
+      const name = user.displayName || fallbackName || email.split("@")[0] || "user";
+
+      // Write profile (idempotent via update)
+      await update(ref(db, `matrixData/${uid}/profile`), {
+        email,
+        name,
+        passKey: "set" // placeholder; don't store real passwords
+      });
+
+      // Write email index
+      await set(ref(db, `emails/${normalizeEmailKey(email)}`), uid);
+    }
+
+    // Show form/buttons
+    window.showForm = function (action) {
+      currentAction = action;
+      choiceBox.style.display = "none";
+      authForm.style.display = "block";
+      resendBox.style.display = "none";
+      message.innerText = "";
+      enterBtn.textContent = action === "create" ? "Create Account" : "Sign In";
+    };
+
+    window.goBack = function () {
+      authForm.style.display = "none";
+      choiceBox.style.display = "block";
+      resendBox.style.display = "none";
+      emailInput.value = "";
+      passwordInput.value = "";
+      message.innerText = "";
+    };
+
+    // Submit
+    enterBtn.addEventListener("click", async () => {
+      const email = emailInput.value.trim();
+      const password = passwordInput.value.trim();
+      if (!email || !password) { message.innerText = "Enter email and password."; return; }
+
+      try {
+        if (currentAction === "create") {
+          const cred = await createUserWithEmailAndPassword(auth, email, password);
+          lastCreatedUser = cred.user;
+
+          // Save profile + email index
+          await ensureProfileAndEmailIndex(cred.user, email.split("@")[0]);
+
+          // Send verification
+          await sendEmailVerification(cred.user);
+          message.innerText = "✅ Account created! Verify your email to continue.";
+          resendBox.style.display = "block";
+        } else {
+          const cred = await signInWithEmailAndPassword(auth, email, password);
+
+          if (!cred.user.emailVerified) {
+            message.innerText = "❌ Please verify your email before signing in.";
+            resendBox.style.display = "block";
+            lastCreatedUser = cred.user;
+            return;
+          }
+
+          // Make sure index exists even for older accounts
+          await ensureProfileAndEmailIndex(cred.user);
+
+          message.innerText = "✅ Signed in! Redirecting...";
+          setTimeout(() => (window.location.href = "search.html"), 800);
+        }
+      } catch (err) {
+        message.innerText = "❌ " + (err?.message || err);
+      }
+    });
+
+    // Resend verification
+    resendBtn.addEventListener("click", async () => {
+      if (!lastCreatedUser) { message.innerText = "❌ No user available for resend."; return; }
+      try {
+        await sendEmailVerification(lastCreatedUser);
+        message.innerText = "📩 Verification email resent.";
+      } catch (err) {
+        message.innerText = "❌ " + (err?.message || err);
+      }
+    });
+
+    // Google login
+    window.googleLogin = async function () {
+      message.innerText = "";
+      try {
+        const result = await signInWithPopup(auth, provider);
+        await ensureProfileAndEmailIndex(result.user);
+
+        message.innerText = "✅ Google login successful! Redirecting...";
+        setTimeout(() => (window.location.href = "search.html"), 800);
+      } catch (err) {
+        message.innerText = "❌ " + (err?.message || err);
+      }
+    };
+  </script>
+</body>
+</html>

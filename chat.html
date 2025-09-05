@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chat - chatbot0916</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 0; background: #f0f2f5; display: flex; flex-direction: column; height: 100vh; }
+    .header { background: #2575fc; color: white; padding: 1rem; text-align: center; font-size: 1.2rem; }
+    .messages { flex: 1; padding: 1rem; overflow-y: auto; display: flex; flex-direction: column; }
+    .msg { max-width: 70%; padding: 0.6rem 1rem; border-radius: 10px; margin: 0.3rem 0; position: relative; }
+    .me { background: #2575fc; color: white; align-self: flex-end; border-bottom-right-radius: 0; }
+    .them { background: #fff; color: black; align-self: flex-start; border-bottom-left-radius: 0; }
+    .replyPreview { font-size: 0.8rem; opacity: 0.8; margin-bottom: 3px; border-left: 3px solid #666; padding-left: 5px; }
+    .inputContainer { display: flex; flex-direction: column; background: white; border-top: 1px solid #ddd; }
+    .replyBox { display: none; background: #eee; padding: 5px; font-size: 0.9rem; border-left: 3px solid #2575fc; margin: 3px; }
+    .replyBox span { font-weight: bold; }
+    .inputBox { display: flex; padding: 0.8rem; }
+    .inputBox input { flex: 1; padding: 0.7rem; border: 1px solid #ccc; border-radius: 8px; }
+    .inputBox button { margin-left: 0.5rem; padding: 0.7rem 1.2rem; border: none; border-radius: 8px; background: #2575fc; color: white; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <div class="header" id="chatHeader">Chat</div>
+  <div class="messages" id="messages"></div>
+
+  <div class="inputContainer">
+    <div class="replyBox" id="replyBox">
+      Replying to: <span id="replyText"></span>
+      <button onclick="clearReply()" style="float:right; background:none; border:none; cursor:pointer; color:red;">✖</button>
+    </div>
+    <div class="inputBox">
+      <input type="text" id="msgInput" placeholder="Type a message...">
+      <button id="sendBtn">Send</button>
+    </div>
+  </div>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-app.js";
+    import { getAuth, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-auth.js";
+    import { getDatabase, ref, push, set, onChildAdded, serverTimestamp } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-database.js";
+
+    // ✅ Firebase config
+    const firebaseConfig = {
+      apiKey: "AIzaSyCQXgRvpR285OV_HmBRgbBmcNNCcfyfDWI",
+      authDomain: "chattingbot0916.firebaseapp.com",
+      projectId: "chattingbot0916",
+      storageBucket: "chattingbot0916.firebasestorage.app",
+      messagingSenderId: "955856103094",
+      appId: "1:955856103094:web:349c85927913b0fc4fa817",
+      databaseURL: "https://chattingbot0916-default-rtdb.firebaseio.com/"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getDatabase(app);
+
+    const messagesDiv = document.getElementById("messages");
+    const msgInput = document.getElementById("msgInput");
+    const sendBtn = document.getElementById("sendBtn");
+    const chatHeader = document.getElementById("chatHeader");
+    const replyBox = document.getElementById("replyBox");
+    const replyText = document.getElementById("replyText");
+
+    let currentUser = null;
+    let friendId = localStorage.getItem("chatFriend");
+    let chatRef;
+    let replyTarget = null;
+
+    if (!friendId) {
+      alert("⚠️ No friend selected!");
+      window.location.href = "search.html";
+    }
+
+    onAuthStateChanged(auth, (user) => {
+      if (!user) {
+        window.location.href = "index1.html";
+        return;
+      }
+      currentUser = user;
+      startChat();
+    });
+
+    function startChat() {
+      chatHeader.textContent = "Chat with " + friendId.substring(0,6) + "...";
+
+      const chatId = currentUser.uid < friendId 
+                      ? currentUser.uid + "_" + friendId 
+                      : friendId + "_" + currentUser.uid;
+
+      chatRef = ref(db, "chats/" + chatId);
+
+      // Listen for new messages
+      onChildAdded(chatRef, (snap) => {
+        const msg = snap.val();
+        const div = document.createElement("div");
+        div.className = "msg " + (msg.from === currentUser.uid ? "me" : "them");
+        div.draggable = true;
+        div.ondragstart = () => setReply(msg.text);
+
+        // If reply exists, show preview
+        if (msg.replyTo) {
+          const preview = document.createElement("div");
+          preview.className = "replyPreview";
+          preview.textContent = "↪ " + msg.replyTo;
+          div.appendChild(preview);
+        }
+
+        // Main text
+        const textNode = document.createElement("div");
+        textNode.textContent = msg.text;
+        div.appendChild(textNode);
+
+        messagesDiv.appendChild(div);
+        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+      });
+
+      // Send message
+      sendBtn.onclick = sendMessage;
+      msgInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          sendMessage();
+        }
+      });
+    }
+
+    async function sendMessage() {
+      const text = msgInput.value.trim();
+      if (!text) return;
+
+      const newMsgRef = push(chatRef);
+      await set(newMsgRef, {
+        from: currentUser.uid,
+        to: friendId,
+        text: text,
+        replyTo: replyTarget, // include reply
+        timestamp: serverTimestamp()
+      });
+
+      msgInput.value = "";
+      clearReply();
+    }
+
+    function setReply(text) {
+      replyTarget = text;
+      replyBox.style.display = "block";
+      replyText.textContent = text;
+    }
+
+    window.clearReply = function() {
+      replyTarget = null;
+      replyBox.style.display = "none";
+      replyText.textContent = "";
+    }
+  </script>
+</body>
+</html>
