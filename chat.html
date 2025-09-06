@@ -15,14 +15,24 @@
     .inputContainer { display: flex; flex-direction: column; background: white; border-top: 1px solid #ddd; }
     .replyBox { display: none; background: #eee; padding: 5px; font-size: 0.9rem; border-left: 3px solid #2575fc; margin: 3px; }
     .replyBox span { font-weight: bold; }
-    .inputBox { display: flex; padding: 0.8rem; }
+    .inputBox { display: flex; padding: 0.8rem; align-items: center; }
     .inputBox input { flex: 1; padding: 0.7rem; border: 1px solid #ccc; border-radius: 8px; }
     .inputBox button { margin-left: 0.5rem; padding: 0.7rem 1.2rem; border: none; border-radius: 8px; background: #2575fc; color: white; cursor: pointer; }
+    #friendActiveEmoji { display: none; font-size: 1.5rem; margin-right: 5px; animation: pulse 1.2s infinite; }
+    #typingIndicator { display: none; font-size: 0.9rem; color: gray; padding: 3px 10px; }
+    @keyframes pulse {
+      0% { transform: scale(1); opacity: 0.7; }
+      50% { transform: scale(1.2); opacity: 1; }
+      100% { transform: scale(1); opacity: 0.7; }
+    }
+    .timestamp { font-size: 0.7rem; opacity: 0.6; margin-top: 2px; }
   </style>
 </head>
 <body>
   <div class="header" id="chatHeader">Chat</div>
   <div class="messages" id="messages"></div>
+
+  <div id="typingIndicator">✍️ Friend is typing...</div>
 
   <div class="inputContainer">
     <div class="replyBox" id="replyBox">
@@ -30,6 +40,7 @@
       <button onclick="clearReply()" style="float:right; background:none; border:none; cursor:pointer; color:red;">✖</button>
     </div>
     <div class="inputBox">
+      <div id="friendActiveEmoji">👋</div>
       <input type="text" id="msgInput" placeholder="Type a message...">
       <button id="sendBtn">Send</button>
     </div>
@@ -38,7 +49,7 @@
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-app.js";
     import { getAuth, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-auth.js";
-    import { getDatabase, ref, push, set, onChildAdded, serverTimestamp } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-database.js";
+    import { getDatabase, ref, push, set, onChildAdded, serverTimestamp, onValue, onDisconnect } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-database.js";
 
     // ✅ Firebase config
     const firebaseConfig = {
@@ -61,11 +72,14 @@
     const chatHeader = document.getElementById("chatHeader");
     const replyBox = document.getElementById("replyBox");
     const replyText = document.getElementById("replyText");
+    const friendActiveEmoji = document.getElementById("friendActiveEmoji");
+    const typingIndicator = document.getElementById("typingIndicator");
 
     let currentUser = null;
     let friendId = localStorage.getItem("chatFriend");
     let chatRef;
     let replyTarget = null;
+    let chatId;
 
     if (!friendId) {
       alert("⚠️ No friend selected!");
@@ -84,13 +98,49 @@
     function startChat() {
       chatHeader.textContent = "Chat with " + friendId.substring(0,6) + "...";
 
-      const chatId = currentUser.uid < friendId 
-                      ? currentUser.uid + "_" + friendId 
-                      : friendId + "_" + currentUser.uid;
+      chatId = currentUser.uid < friendId 
+                ? currentUser.uid + "_" + friendId 
+                : friendId + "_" + currentUser.uid;
 
       chatRef = ref(db, "chats/" + chatId);
 
-      // Listen for new messages
+      // ✅ Track my presence
+      const myPresenceRef = ref(db, "presence/" + chatId + "/" + currentUser.uid);
+      set(myPresenceRef, { active: true });
+      onDisconnect(myPresenceRef).remove();
+
+      // ✅ Show friend's presence
+      const friendPresenceRef = ref(db, "presence/" + chatId + "/" + friendId);
+      onValue(friendPresenceRef, (snap) => {
+        if (snap.exists() && snap.val().active) {
+          friendActiveEmoji.style.display = "block";
+        } else {
+          friendActiveEmoji.style.display = "none";
+        }
+      });
+
+      // ✅ Typing indicator
+      const typingRef = ref(db, "typing/" + chatId + "/" + currentUser.uid);
+      const friendTypingRef = ref(db, "typing/" + chatId + "/" + friendId);
+
+      msgInput.addEventListener("input", () => {
+        set(typingRef, { isTyping: true });
+        clearTimeout(msgInput._typingTimeout);
+        msgInput._typingTimeout = setTimeout(() => {
+          set(typingRef, { isTyping: false });
+        }, 1500);
+      });
+
+      onValue(friendTypingRef, (snap) => {
+        if (snap.exists() && snap.val().isTyping) {
+          typingIndicator.style.display = "block";
+          friendActiveEmoji.style.display = "none"; // hide wave when typing
+        } else {
+          typingIndicator.style.display = "none";
+        }
+      });
+
+      // ✅ Listen for new messages
       onChildAdded(chatRef, (snap) => {
         const msg = snap.val();
         const div = document.createElement("div");
@@ -98,7 +148,7 @@
         div.draggable = true;
         div.ondragstart = () => setReply(msg.text);
 
-        // If reply exists, show preview
+        // Reply preview
         if (msg.replyTo) {
           const preview = document.createElement("div");
           preview.className = "replyPreview";
@@ -106,16 +156,24 @@
           div.appendChild(preview);
         }
 
-        // Main text
+        // Message text
         const textNode = document.createElement("div");
         textNode.textContent = msg.text;
         div.appendChild(textNode);
+
+        // Timestamp
+        if (msg.timestamp) {
+          const timeNode = document.createElement("div");
+          timeNode.className = "timestamp";
+          timeNode.textContent = new Date(msg.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+          div.appendChild(timeNode);
+        }
 
         messagesDiv.appendChild(div);
         messagesDiv.scrollTop = messagesDiv.scrollHeight;
       });
 
-      // Send message
+      // ✅ Send message
       sendBtn.onclick = sendMessage;
       msgInput.addEventListener("keydown", (e) => {
         if (e.key === "Enter") {
@@ -134,8 +192,8 @@
         from: currentUser.uid,
         to: friendId,
         text: text,
-        replyTo: replyTarget, // include reply
-        timestamp: serverTimestamp()
+        replyTo: replyTarget,
+        timestamp: Date.now()
       });
 
       msgInput.value = "";
